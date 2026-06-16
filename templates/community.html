@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Community Questions · World Cup 2026 Quiz</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗳️</text></svg>">
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+  <div class="absolute inset-0 overflow-hidden -z-10">
+    <div class="absolute -top-32 -left-32 h-96 w-96 rounded-full bg-sky-500/20 blur-3xl"></div>
+    <div class="absolute top-40 right-0 h-96 w-96 rounded-full bg-emerald-500/20 blur-3xl"></div>
+  </div>
+
+  <main class="mx-auto max-w-3xl px-5 py-10">
+    <header class="mb-8">
+      <a href="/" class="text-sm text-slate-500 hover:text-slate-300">← Back to quizzes</a>
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 class="text-3xl sm:text-4xl font-black tracking-tight">🗳️ Community questions</h1>
+          <p class="mt-2 text-slate-400">Upvote the questions you'd love to see in the quiz. {{.Total}} submitted so far.</p>
+        </div>
+        <a href="/community/new" class="rounded-xl bg-sky-500 px-5 py-3 font-bold text-slate-950 transition hover:bg-sky-400">+ Submit a question</a>
+      </div>
+    </header>
+
+    {{if .Submitted}}
+    <div class="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-emerald-300">
+      🎉 Thanks! Your question is now on the board — go give it the first upvote.
+    </div>
+    {{end}}
+
+    <form method="get" action="/community" class="mb-6 flex flex-wrap items-center gap-3 text-sm">
+      <select name="lang" onchange="this.form.submit()" class="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2">
+        <option value="">All languages</option>
+        {{range .Languages}}<option value="{{.Code}}" {{if eq .Code $.FilterLang}}selected{{end}}>{{.Label}}</option>{{end}}
+      </select>
+      <select name="difficulty" onchange="this.form.submit()" class="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2">
+        <option value="">All difficulties</option>
+        {{range .Difficulties}}<option value="{{.Key}}" {{if eq .Key $.FilterDiff}}selected{{end}}>{{.Emoji}} {{.Title}}</option>{{end}}
+      </select>
+      {{if or .FilterLang .FilterDiff}}<a href="/community" class="text-slate-500 hover:text-slate-300">clear</a>{{end}}
+      <span class="ml-auto text-slate-500">{{.Count}} shown</span>
+    </form>
+
+    {{if not .Cards}}
+    <div class="rounded-2xl border border-slate-800 bg-slate-900/40 p-10 text-center text-slate-400">
+      No questions here yet. <a href="/community/new" class="text-sky-400 hover:underline">Be the first to submit one!</a>
+    </div>
+    {{end}}
+
+    <div class="space-y-4">
+      {{range .Cards}}
+      <article class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5" data-id="{{.ID}}">
+        <div class="flex items-start gap-4">
+          <button type="button" onclick="vote(this, '{{.ID}}')"
+            class="vote-btn flex shrink-0 flex-col items-center rounded-xl border border-slate-700 px-3 py-2 transition hover:border-sky-500 hover:bg-sky-500/10 {{if .Voted}}border-sky-500 bg-sky-500/10 text-sky-300{{end}}"
+            {{if .Voted}}data-voted="1"{{end}} aria-label="Upvote">
+            <span class="text-lg leading-none">▲</span>
+            <span class="vote-count mt-1 text-sm font-bold">{{.Votes}}</span>
+          </button>
+          <div class="min-w-0 flex-1">
+            <div class="mb-2 flex flex-wrap gap-2 text-xs">
+              <span class="rounded-full bg-slate-800 px-2.5 py-1">{{.Difficulty}}</span>
+              <span class="rounded-full bg-slate-800 px-2.5 py-1">{{.Language}}</span>
+              {{if .Author}}<span class="rounded-full bg-slate-800 px-2.5 py-1 text-slate-400">by {{.Author}}</span>{{end}}
+            </div>
+            <h2 class="font-semibold text-slate-100">{{.Text}}</h2>
+            <ul class="mt-3 grid gap-2 sm:grid-cols-2">
+              {{range .Options}}
+              <li class="rounded-lg border px-3 py-2 text-sm {{if .Correct}}border-emerald-500/50 bg-emerald-500/10 text-emerald-300{{else}}border-slate-800 text-slate-300{{end}}">
+                {{if .Correct}}✓ {{end}}{{.Text}}
+              </li>
+              {{end}}
+            </ul>
+            {{if .Fact}}<p class="mt-3 text-sm text-slate-500">💡 {{.Fact}}</p>{{end}}
+          </div>
+        </div>
+      </article>
+      {{end}}
+    </div>
+  </main>
+
+<script>
+async function vote(btn, id){
+  if(btn.dataset.voted) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/community/${id}/vote`, {method:"POST"});
+    const s = await r.json();
+    if(s.ok){
+      const countEl = btn.querySelector(".vote-count");
+      if(s.counted){
+        countEl.textContent = (parseInt(countEl.textContent,10) || 0) + 1;
+      }
+      btn.dataset.voted = "1";
+      btn.classList.add("border-sky-500","bg-sky-500/10","text-sky-300");
+    }
+  } catch(e){ /* transient */ }
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>

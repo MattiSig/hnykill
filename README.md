@@ -16,9 +16,14 @@ code to join as a team, and scores are kept live — Kahoot-style.
 - **Live play** — teams lock in multiple-choice answers; the admin reveals the
   answer, scores update automatically, with a live scoreboard and final podium.
 - **Manual score control** — the admin can nudge any team's score up/down.
-- **In-memory only** — no database, no accounts, no stored data. Everything
-  lives in RAM and is wiped when the server restarts. Security is intentionally
-  out of scope (family use, no sensitive data).
+- **Community questions** 🗳️ — anyone can submit their own questions (any
+  difficulty, any single language) and **upvote** the best ones at `/community`,
+  so real players help grow and improve the question bank. A lightweight
+  built-in "not a robot" check (a signed arithmetic captcha) keeps out drive-by
+  spam. This is the one part of the app that is **persisted** (see below).
+- **In-memory gameplay** — live quizzes have no database, no accounts, no stored
+  data; everything lives in RAM and is wiped when the server restarts. Security
+  is intentionally out of scope (family use, no sensitive data).
 
 ## Run locally
 
@@ -40,6 +45,8 @@ and the join link (or `/j/<CODE>`) in another (or a phone on the same network).
 | `/admin/{id}?t={token}` | quiz master | Scoreboard, QR code, run the quiz |
 | `/j/{id}` | attendees | Join as a team (scan the QR code) |
 | `/play/{id}` | team captains | Answer questions live |
+| `/community` | anyone | Browse & upvote community-submitted questions |
+| `/community/new` | anyone | Submit a question (captcha-gated) |
 
 State is polled over a small JSON API every ~1.5s, so no WebSockets are needed.
 The UI is styled with [Tailwind CSS](https://tailwindcss.com) (Play CDN) and QR
@@ -56,8 +63,17 @@ This repo is ready for [Railway](https://railway.app):
 3. Railway injects a `PORT` env var, which the server reads automatically.
 4. A healthcheck is configured at `/healthz`.
 
-No environment variables are required. Once deployed, open the public URL and
-start a quiz.
+For **community questions to survive restarts/redeploys**, give the service a
+persistent store. The app picks one automatically:
+
+| Env var | Effect |
+|---------|--------|
+| `DATABASE_URL` | If set, community questions are stored in **Postgres** (add a Postgres database in Railway and reference its `DATABASE_URL`). Recommended for production. |
+| `DATA_DIR` | Otherwise questions are kept in a JSON file at `$DATA_DIR/community.json` (default `./data`). Point this at a mounted **Railway Volume** to persist. |
+| `CAPTCHA_SECRET` | Optional. Signs captcha tokens; if unset a random secret is generated at startup (a restart simply invalidates in-flight challenges). |
+
+Without any of these the quiz still runs perfectly; only the community board's
+data is ephemeral. Once deployed, open the public URL and start a quiz.
 
 ## Updating the questions
 
