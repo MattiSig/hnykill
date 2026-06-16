@@ -23,15 +23,6 @@
     </header>
 
     <form method="post" action="/create">
-      <div class="mb-6 flex flex-wrap items-center justify-center gap-3">
-        <label for="lang" class="text-sm font-semibold text-slate-300">Question language</label>
-        <select id="lang" name="lang"
-          class="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500">
-          {{range .Languages}}<option value="{{.Code}}">{{.Label}}</option>{{end}}
-        </select>
-        <span class="text-xs text-slate-500">Sets the language of the questions. The app stays in English.</span>
-      </div>
-
       <div class="grid gap-5 sm:grid-cols-3">
         {{range .Difficulties}}
         <button type="submit" name="difficulty" value="{{.Key}}"
@@ -66,6 +57,7 @@
       <h3 class="font-semibold text-slate-200 mb-2">How it works</h3>
       <ol class="list-decimal list-inside space-y-1">
         <li>Choose a difficulty above — you become the <span class="text-slate-200">quiz master &amp; scorekeeper</span>.</li>
+        <li>Pick the <span class="text-slate-200">question language</span> (English, Íslenska or Svenska) on your quiz master screen.</li>
         <li>Show the QR code so everyone can scan and join as a team.</li>
         <li>Run the questions; scores are tallied live. Have fun!</li>
       </ol>

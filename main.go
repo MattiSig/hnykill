@@ -114,7 +114,6 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 	render(w, "home.html", map[string]any{
 		"Difficulties": diffs,
-		"Languages":    languages,
 	})
 }
 
@@ -162,6 +161,8 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 		"Points":      q.Points,
 		"Mixed":       q.Mixed,
 		"DiffOptions": diffOpts,
+		"Lang":        q.Lang,
+		"Languages":   languages,
 		"JoinURL":     baseURL(r) + "/j/" + q.ID,
 	})
 }
@@ -294,6 +295,7 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		"points":        q.Points,
 		"isAdmin":       isAdmin,
 		"mixed":         q.Mixed,
+		"lang":          q.Lang,
 		"difficulty":    title,
 		"teamCount":     len(q.teams),
 		"answeredCount": 0,
@@ -388,6 +390,8 @@ func handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		q.Adjust(r.FormValue("team"), delta)
 	case "setdiff":
 		q.SetTeamDifficulty(r.FormValue("team"), r.FormValue("difficulty"))
+	case "setlang":
+		q.SetLang(r.FormValue("lang"))
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return
