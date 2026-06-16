@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,6 +49,60 @@ type CommunityStore interface {
 	Vote(id, voterID string) (bool, error)
 	// Count returns the total number of stored questions.
 	Count() int
+	// Seed inserts the given questions if they are not already present (matched
+	// by ID). It is idempotent so it can run on every startup without creating
+	// duplicates or disturbing existing vote tallies. Returns how many were added.
+	Seed(qs []*CommunityQuestion) (int, error)
+}
+
+// officialAuthor labels the starter questions seeded from the built-in bank so
+// the UI can distinguish them from genuine community submissions.
+const officialAuthor = "Official"
+
+// officialID derives a stable id from a seeded question's language and text, so
+// re-seeding is idempotent (the same question always maps to the same row).
+func officialID(lang, text string) string {
+	sum := sha256.Sum256([]byte(lang + "\x00" + text))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// officialQuestions expands the built-in question bank into one single-language
+// community question per (question, language), translated via localize so each
+// card reads naturally in its language.
+func officialQuestions() []*CommunityQuestion {
+	var out []*CommunityQuestion
+	for _, key := range difficultyOrder {
+		meta := difficulties[key]
+		for _, q := range meta.Questions {
+			for _, lang := range languages {
+				text, options, fact := localize(q, lang.Code)
+				out = append(out, &CommunityQuestion{
+					ID:         officialID(lang.Code, text),
+					Text:       text,
+					Options:    options,
+					Answer:     q.Answer,
+					Fact:       fact,
+					Difficulty: key,
+					Language:   lang.Code,
+					Author:     officialAuthor,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// seedOfficialQuestions loads the built-in bank into the community board. Safe to
+// call on every startup.
+func seedOfficialQuestions(store CommunityStore) {
+	added, err := store.Seed(officialQuestions())
+	if err != nil {
+		log.Printf("community seed: %v", err)
+		return
+	}
+	if added > 0 {
+		log.Printf("community seed: added %d official starter questions", added)
+	}
 }
 
 // newCommunityStore picks Postgres when DATABASE_URL is set (production on
@@ -247,6 +304,34 @@ func (s *fileCommunityStore) Count() int {
 	return len(s.items)
 }
 
+func (s *fileCommunityStore) Seed(qs []*CommunityQuestion) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := make(map[string]bool, len(s.items))
+	for _, q := range s.items {
+		existing[q.ID] = true
+	}
+	added := 0
+	for _, q := range qs {
+		if q.ID == "" || existing[q.ID] {
+			continue
+		}
+		if q.CreatedAt.IsZero() {
+			q.CreatedAt = time.Now()
+		}
+		if q.Voters == nil {
+			q.Voters = map[string]bool{}
+		}
+		s.items = append(s.items, q)
+		existing[q.ID] = true
+		added++
+	}
+	if added == 0 {
+		return 0, nil
+	}
+	return added, s.saveLocked()
+}
+
 // saveLocked atomically persists the current items. Caller must hold s.mu.
 func (s *fileCommunityStore) saveLocked() error {
 	if s.path == "" {
@@ -397,4 +482,38 @@ func (s *pgCommunityStore) Count() int {
 		return 0
 	}
 	return n
+}
+
+func (s *pgCommunityStore) Seed(qs []*CommunityQuestion) (int, error) {
+	if len(qs) == 0 {
+		return 0, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	batch := &pgx.Batch{}
+	for _, q := range qs {
+		opts, err := json.Marshal(q.Options)
+		if err != nil {
+			return 0, err
+		}
+		created := q.CreatedAt
+		if created.IsZero() {
+			created = time.Now()
+		}
+		batch.Queue(`
+INSERT INTO community_questions (id, text, options, answer, fact, difficulty, language, author, votes, created_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING`,
+			q.ID, q.Text, opts, q.Answer, q.Fact, q.Difficulty, q.Language, q.Author, q.Votes, created)
+	}
+	br := s.pool.SendBatch(ctx, batch)
+	defer br.Close()
+	added := 0
+	for range qs {
+		tag, err := br.Exec()
+		if err != nil {
+			return added, err
+		}
+		added += int(tag.RowsAffected())
+	}
+	return added, nil
 }

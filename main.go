@@ -24,6 +24,8 @@ var store = NewStore()
 var community = newCommunityStore()
 
 func main() {
+	seedOfficialQuestions(community)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /", handleHome)
@@ -461,6 +463,7 @@ type communityCardView struct {
 	Difficulty string
 	Language   string
 	Author     string
+	Official   bool
 	Votes      int
 	Voted      bool
 }
@@ -521,6 +524,7 @@ func handleCommunityBrowse(w http.ResponseWriter, r *http.Request) {
 			Difficulty: diffLabel(q.Difficulty),
 			Language:   langLabel(q.Language),
 			Author:     q.Author,
+			Official:   q.Author == officialAuthor,
 			Votes:      q.Votes,
 			Voted:      q.Voters[voterID],
 		})

@@ -142,6 +142,69 @@ func TestFileStoreVoteAndOrder(t *testing.T) {
 	}
 }
 
+func TestSeedIsIdempotentAndPreservesVotes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "community.json")
+	s, err := newFileCommunityStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seed := officialQuestions()
+	want := 84 * len(languages) // every built-in question in every language
+	if len(seed) != want {
+		t.Fatalf("officialQuestions() = %d, want %d", len(seed), want)
+	}
+
+	added, err := s.Seed(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != want || s.Count() != want {
+		t.Fatalf("first seed added %d / count %d, want %d", added, s.Count(), want)
+	}
+
+	// Cast a vote on an official question.
+	official, _ := s.List("en", "")
+	if len(official) == 0 {
+		t.Fatal("no english questions after seed")
+	}
+	if voted, _ := s.Vote(official[0].ID, "voter-A"); !voted {
+		t.Fatal("vote on official question should count")
+	}
+
+	// Re-seed (simulates a restart/redeploy): nothing new, no duplicates.
+	added2, err := s.Seed(officialQuestions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added2 != 0 {
+		t.Errorf("re-seed added %d, want 0", added2)
+	}
+	if s.Count() != want {
+		t.Errorf("count after re-seed = %d, want %d", s.Count(), want)
+	}
+
+	// The vote must survive the re-seed.
+	again, _ := s.List("en", "")
+	var votes int
+	for _, q := range again {
+		if q.ID == official[0].ID {
+			votes = q.Votes
+		}
+	}
+	if votes != 1 {
+		t.Errorf("vote lost across re-seed: votes = %d, want 1", votes)
+	}
+
+	// Stable, namespaced ids: same text, different language -> different id.
+	if officialID("en", "x") == officialID("is", "x") {
+		t.Error("officialID should differ by language")
+	}
+	if officialID("en", "x") != officialID("en", "x") {
+		t.Error("officialID should be deterministic")
+	}
+}
+
 func TestFileStoreFilter(t *testing.T) {
 	s, _ := newFileCommunityStore(filepath.Join(t.TempDir(), "c.json"))
 	_ = s.Add(&CommunityQuestion{Text: "en-kids", Options: []string{"a", "b"}, Difficulty: DiffKids, Language: "en"})
