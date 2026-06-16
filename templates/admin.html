@@ -67,6 +67,8 @@ const QUIZ = "{{.QuizID}}";
 const TOKEN = "{{.Token}}";
 const JOIN_URL = "{{.JoinURL}}";
 const ACCENT = "{{.Accent}}";
+const MIXED = {{if .Mixed}}true{{else}}false{{end}};
+const DIFFS = [{{range .DiffOptions}}{key:"{{.Key}}",title:"{{.Title}}",emoji:"{{.Emoji}}"},{{end}}];
 const optionLabels = ["A","B","C","D","E"];
 const optionColors = ["bg-rose-500","bg-sky-500","bg-amber-500","bg-emerald-500","bg-violet-500"];
 
@@ -88,7 +90,26 @@ function lobbyHTML(s){
     <div class="font-mono text-${ACCENT}-400 break-all">${JOIN_URL}</div>
     <div class="mt-2 text-slate-500 text-sm">Join code: <span class="font-bold tracking-widest">${QUIZ}</span></div>
     <p class="mt-6 text-slate-500 text-sm">${s.teamCount} team${s.teamCount===1?"":"s"} joined ${s.teamCount===0?"— need at least one to start":""}</p>
+    ${MIXED && s.teamCount>0 ? `<p class="mt-2 text-violet-300 text-sm">🎲 Set each team's difficulty in the scoreboard → everyone scores equal points.</p>` : ""}
   </div>`;
+}
+
+// mixedStageHTML is shown to the quizmaster during a mixed-mode question, where
+// each team answers its own question on its own device.
+function mixedStageHTML(s){
+  const reveal = s.phase === "revealed";
+  return `
+    <div class="flex items-center justify-between mb-3">
+      <span class="text-xs font-semibold uppercase tracking-wide text-${ACCENT}-400">Question ${s.current+1} of ${s.total}</span>
+      <span class="text-xs text-slate-500">${s.answeredCount}/${s.teamCount} teams answered</span>
+    </div>
+    <div class="grid place-items-center min-h-[180px] text-center">
+      <div>
+        <div class="text-5xl mb-3">🎲</div>
+        <h2 class="text-xl font-bold mb-1">Mixed difficulty round</h2>
+        <p class="text-slate-400 text-sm max-w-sm">Each team has its own question on their device. ${reveal ? "Answers are revealed — every correct team scored "+s.points+" points." : "Hit <span class=\"text-slate-200 font-semibold\">Reveal &amp; score</span> when everyone has locked in."}</p>
+      </div>
+    </div>`;
 }
 
 function questionHTML(s){
@@ -138,9 +159,22 @@ function renderBoard(s){
     let badge = "";
     if(s.phase==="question") badge = t.answered ? '<span class="text-emerald-400 text-xs">●&nbsp;in</span>' : '<span class="text-slate-600 text-xs">○ waiting</span>';
     if(s.phase==="revealed") badge = t.choice<0 ? '<span class="text-slate-600 text-xs">—</span>' : (t.correct ? '<span class="text-emerald-400 text-xs">✔ +'+s.points+'</span>' : '<span class="text-rose-400 text-xs">✗</span>');
+    // Mixed mode: in the lobby, let the quizmaster pick each team's difficulty;
+    // once started, just show the assigned level as a badge.
+    let diffCell = "";
+    if(MIXED){
+      if(s.phase==="lobby"){
+        const opts = DIFFS.map(d=>`<option value="${d.key}" ${t.difficulty===d.key?"selected":""}>${d.emoji} ${d.title}</option>`).join("");
+        diffCell = `<select onchange="act('setdiff',{team:'${t.id}',difficulty:this.value})" class="rounded-lg border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-200">${opts}</select>`;
+      } else {
+        const d = DIFFS.find(d=>d.key===t.difficulty);
+        diffCell = d ? `<span class="rounded-full bg-slate-700/70 px-2 py-0.5 text-xs text-slate-300">${d.emoji} ${d.title}</span>` : "";
+      }
+    }
     return `<li class="flex items-center gap-2 rounded-xl bg-slate-800/50 px-3 py-2">
       <span class="text-slate-500 w-5 text-center text-sm">${i+1}</span>
       <span class="font-semibold truncate">${escapeHTML(t.name)}</span>
+      ${diffCell}
       ${badge}
       <span class="ml-auto font-black text-${ACCENT}-400">${t.score}</span>
       <span class="flex gap-1">
@@ -178,6 +212,7 @@ async function poll(){
     const stage = document.getElementById("stage");
     if(s.phase==="lobby") stage.innerHTML = lobbyHTML(s);
     else if(s.phase==="finished") stage.innerHTML = finishedHTML(s);
+    else if(MIXED) stage.innerHTML = mixedStageHTML(s);
     else stage.innerHTML = questionHTML(s);
     renderBoard(s);
     renderControls(s);

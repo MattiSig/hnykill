@@ -52,6 +52,50 @@ func TestQuestionBanks(t *testing.T) {
 	}
 }
 
+// TestTranslations ensures every question is fully translated into each
+// non-English language, with the option count preserved so the Answer index
+// stays valid. Missing or malformed translations would silently fall back to
+// English at runtime, so we guard against that here.
+func TestTranslations(t *testing.T) {
+	for _, lang := range []string{LangIS, LangSV} {
+		for _, key := range difficultyOrder {
+			for i, q := range difficulties[key].Questions {
+				where := lang + " " + key + " Q" + itoa(i)
+				l, ok := translationFor(q.Text, lang)
+				if !ok {
+					t.Errorf("%s: missing translation for %q", where, q.Text)
+					continue
+				}
+				if strings.TrimSpace(l.Text) == "" {
+					t.Errorf("%s: empty translated text", where)
+				}
+				if strings.TrimSpace(l.Fact) == "" {
+					t.Errorf("%s: empty translated fact", where)
+				}
+				if len(l.Options) != len(q.Options) {
+					t.Errorf("%s: translated options count %d != original %d", where, len(l.Options), len(q.Options))
+					continue
+				}
+				for j, o := range l.Options {
+					if strings.TrimSpace(o) == "" {
+						t.Errorf("%s: empty translated option %d", where, j)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestLocalizeFallback verifies that an untranslated question falls back to
+// English content (the desired behaviour for disputed terms).
+func TestLocalizeFallback(t *testing.T) {
+	q := Question{Text: "____no such question____", Options: []string{"a", "b"}, Answer: 0, Fact: "f"}
+	text, opts, fact := localize(q, LangIS)
+	if text != q.Text || fact != q.Fact || len(opts) != len(q.Options) {
+		t.Errorf("expected English fallback, got text=%q fact=%q opts=%v", text, fact, opts)
+	}
+}
+
 // TestPickQuestions ensures a game draws the right count without duplicates.
 func TestPickQuestions(t *testing.T) {
 	for _, key := range difficultyOrder {

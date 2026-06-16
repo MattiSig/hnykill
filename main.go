@@ -83,6 +83,16 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func playerCookieName(quizID string) string { return "hny_pid_" + quizID }
 
+// quizMeta returns display fields (title, emoji, accent) for a quiz, handling
+// the synthetic "mixed" difficulty which has no entry in the difficulties map.
+func quizMeta(q *Quiz) (title, emoji, accent string) {
+	if q.Mixed {
+		return "Mixed", "🎲", "violet"
+	}
+	m := difficulties[q.Difficulty]
+	return m.Title, m.Emoji, m.Accent
+}
+
 // ---- handlers ----
 
 func handleHome(w http.ResponseWriter, r *http.Request) {
@@ -102,16 +112,21 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 			Accent: d.Accent, Points: d.Points, Count: len(d.Questions),
 		})
 	}
-	render(w, "home.html", map[string]any{"Difficulties": diffs})
+	render(w, "home.html", map[string]any{
+		"Difficulties": diffs,
+		"Languages":    languages,
+	})
 }
 
 func handleCreate(w http.ResponseWriter, r *http.Request) {
 	diff := r.FormValue("difficulty")
-	if _, ok := difficulties[diff]; !ok {
-		http.Error(w, "unknown difficulty", http.StatusBadRequest)
-		return
+	if diff != DiffMixed {
+		if _, ok := difficulties[diff]; !ok {
+			http.Error(w, "unknown difficulty", http.StatusBadRequest)
+			return
+		}
 	}
-	q := store.CreateQuiz(diff)
+	q := store.CreateQuiz(diff, r.FormValue("lang"))
 	http.Redirect(w, r, "/admin/"+q.ID+"?t="+q.AdminToken, http.StatusSeeOther)
 }
 
@@ -125,16 +140,29 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 		render(w, "denied.html", nil)
 		return
 	}
-	meta := difficulties[q.Difficulty]
+	title, emoji, accent := quizMeta(q)
+	total := len(q.Questions)
+	if q.Mixed {
+		total = q.Rounds
+	}
+	// Difficulty choices offered for per-team assignment in mixed mode.
+	type diffOpt struct{ Key, Title, Emoji string }
+	var diffOpts []diffOpt
+	for _, key := range difficultyOrder {
+		d := difficulties[key]
+		diffOpts = append(diffOpts, diffOpt{d.Key, d.Title, d.Emoji})
+	}
 	render(w, "admin.html", map[string]any{
-		"QuizID":     q.ID,
-		"Token":      q.AdminToken,
-		"Difficulty": meta.Title,
-		"Emoji":      meta.Emoji,
-		"Accent":     meta.Accent,
-		"Total":      len(q.Questions),
-		"Points":     q.Points,
-		"JoinURL":    baseURL(r) + "/j/" + q.ID,
+		"QuizID":      q.ID,
+		"Token":       q.AdminToken,
+		"Difficulty":  title,
+		"Emoji":       emoji,
+		"Accent":      accent,
+		"Total":       total,
+		"Points":      q.Points,
+		"Mixed":       q.Mixed,
+		"DiffOptions": diffOpts,
+		"JoinURL":     baseURL(r) + "/j/" + q.ID,
 	})
 }
 
@@ -168,12 +196,12 @@ func handleJoin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	meta := difficulties[q.Difficulty]
+	title, emoji, accent := quizMeta(q)
 	render(w, "join.html", map[string]any{
 		"QuizID":     q.ID,
-		"Difficulty": meta.Title,
-		"Emoji":      meta.Emoji,
-		"Accent":     meta.Accent,
+		"Difficulty": title,
+		"Emoji":      emoji,
+		"Accent":     accent,
 	})
 }
 
@@ -218,13 +246,19 @@ func handlePlay(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/j/"+q.ID, http.StatusSeeOther)
 		return
 	}
-	meta := difficulties[q.Difficulty]
+	title, emoji, accent := quizMeta(q)
+	// In mixed mode show the team's own assigned difficulty.
+	if q.Mixed {
+		if m, ok := difficulties[t.Difficulty]; ok {
+			title, emoji, accent = m.Title, m.Emoji, m.Accent
+		}
+	}
 	render(w, "play.html", map[string]any{
 		"QuizID":     q.ID,
 		"TeamName":   t.Name,
-		"Difficulty": meta.Title,
-		"Emoji":      meta.Emoji,
-		"Accent":     meta.Accent,
+		"Difficulty": title,
+		"Emoji":      emoji,
+		"Accent":     accent,
 	})
 }
 
@@ -246,35 +280,45 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 
 	revealed := q.Phase == PhaseRevealed
 	finished := q.Phase == PhaseFinished
-	meta := difficulties[q.Difficulty]
+	title, _, _ := quizMeta(q)
 
-	state := map[string]any{
-		"phase":           q.Phase,
-		"current":         q.Current,
-		"total":           len(q.Questions),
-		"points":          q.Points,
-		"isAdmin":         isAdmin,
-		"difficulty":      meta.Title,
-		"teamCount":       len(q.teams),
-		"answeredCount":   0,
-		"teams":           q.leaderboardLocked(true, revealed || finished),
+	var viewer *Team
+	if t, ok := q.teams[teamID]; ok {
+		viewer = t
 	}
 
-	// Current question payload (visible during question/revealed phases).
+	state := map[string]any{
+		"phase":         q.Phase,
+		"current":       q.Current,
+		"total":         q.totalLocked(),
+		"points":        q.Points,
+		"isAdmin":       isAdmin,
+		"mixed":         q.Mixed,
+		"difficulty":    title,
+		"teamCount":     len(q.teams),
+		"answeredCount": 0,
+		"teams":         q.leaderboardLocked(true, revealed || finished),
+	}
+
+	// Current question payload (visible during question/revealed phases). In
+	// mixed mode the question is per-team, so the admin (who has no single
+	// question) sees only progress while each player sees their own question.
 	if q.Phase == PhaseQuestion || q.Phase == PhaseRevealed {
-		que := q.Questions[q.Current]
-		answer := -1
-		fact := ""
-		if revealed || isAdmin {
-			answer = que.Answer
+		if que, ok := q.questionForLocked(viewer); ok && !(q.Mixed && viewer == nil) {
+			text, options, factText := localize(que, q.Lang)
+			answer := -1
+			fact := ""
+			if revealed || isAdmin {
+				answer = que.Answer
+			}
+			if revealed {
+				fact = factText
+			}
+			state["question"] = text
+			state["options"] = options
+			state["answer"] = answer
+			state["fact"] = fact
 		}
-		if revealed {
-			fact = que.Fact
-		}
-		state["question"] = que.Text
-		state["options"] = que.Options
-		state["answer"] = answer
-		state["fact"] = fact
 
 		answered := 0
 		for _, t := range q.teams {
@@ -290,7 +334,7 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 	yourScore := 0
 	if t, ok := q.teams[teamID]; ok {
 		yourScore = t.Score
-		if (q.Phase == PhaseQuestion || q.Phase == PhaseRevealed) {
+		if q.Phase == PhaseQuestion || q.Phase == PhaseRevealed {
 			if c, ok := t.answers[q.Current]; ok {
 				yourChoice = c
 			}
@@ -342,6 +386,8 @@ func handleAdminAction(w http.ResponseWriter, r *http.Request) {
 	case "adjust":
 		delta, _ := strconv.Atoi(r.FormValue("delta"))
 		q.Adjust(r.FormValue("team"), delta)
+	case "setdiff":
+		q.SetTeamDifficulty(r.FormValue("team"), r.FormValue("difficulty"))
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return

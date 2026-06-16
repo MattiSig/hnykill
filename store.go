@@ -10,20 +10,24 @@ import (
 
 // Phase represents the lifecycle stage of a quiz.
 const (
-	PhaseLobby     = "lobby"     // waiting for teams to join
-	PhaseQuestion  = "question"  // a question is live, teams can answer
-	PhaseRevealed  = "revealed"  // the answer is shown, scores updated
-	PhaseFinished  = "finished"  // all questions done, final leaderboard
+	PhaseLobby    = "lobby"    // waiting for teams to join
+	PhaseQuestion = "question" // a question is live, teams can answer
+	PhaseRevealed = "revealed" // the answer is shown, scores updated
+	PhaseFinished = "finished" // all questions done, final leaderboard
 )
 
 // Team is a group of attendees playing together, run by a captain.
 type Team struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Score    int    `json:"score"`
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	Score    int       `json:"score"`
 	JoinedAt time.Time `json:"-"`
+	// Difficulty is the team's own difficulty in a mixed-mode quiz.
+	Difficulty string `json:"-"`
 	// answers maps question index -> chosen option index for this team.
 	answers map[int]int
+	// questions is this team's own question stream (mixed mode only).
+	questions []Question
 }
 
 // Quiz is a single live quiz session held entirely in memory.
@@ -31,11 +35,14 @@ type Quiz struct {
 	ID         string
 	AdminToken string
 	Difficulty string
+	Lang       string // language for question content: en, is, sv
+	Mixed      bool   // mixed mode: each team plays its own difficulty
+	Rounds     int    // number of questions per game (used in mixed mode)
 	Questions  []Question
 	Points     int
 
-	Phase      string
-	Current    int // index of the current question (valid once started)
+	Phase   string
+	Current int // index of the current question (valid once started)
 
 	teams map[string]*Team
 	order []string // team ids in join order
@@ -43,6 +50,17 @@ type Quiz struct {
 	CreatedAt time.Time
 	mu        sync.Mutex
 }
+
+// mixedRounds is how many questions a mixed-mode game plays. It matches the
+// smallest difficulty draw so every team's stream is the same length.
+const mixedRounds = 12
+
+// mixedPoints is awarded for every correct answer in mixed mode, regardless of
+// difficulty, so a Kids team competes on equal terms with Adult and Nerd teams.
+const mixedPoints = 100
+
+// DiffMixed is the create-time value selecting mixed per-team difficulty.
+const DiffMixed = "mixed"
 
 // Store holds all quizzes in memory. Everything is wiped on restart.
 type Store struct {
@@ -56,8 +74,8 @@ func NewStore() *Store {
 }
 
 const (
-	idAlphabet    = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no ambiguous chars (0/O, 1/I)
-	hexAlphabet   = "0123456789abcdef"
+	idAlphabet  = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no ambiguous chars (0/O, 1/I)
+	hexAlphabet = "0123456789abcdef"
 )
 
 func randString(alphabet string, n int) string {
@@ -74,12 +92,11 @@ func randString(alphabet string, n int) string {
 	return string(b)
 }
 
-// CreateQuiz builds a new quiz for the given difficulty and returns it.
-func (s *Store) CreateQuiz(difficulty string) *Quiz {
-	meta, ok := difficulties[difficulty]
-	if !ok {
-		meta = difficulties[DiffAdult]
-	}
+// CreateQuiz builds a new quiz for the given difficulty and language and
+// returns it. A difficulty of DiffMixed creates a mixed-mode quiz where each
+// team is assigned its own difficulty in the lobby.
+func (s *Store) CreateQuiz(difficulty, lang string) *Quiz {
+	lang = normalizeLang(lang)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -95,14 +112,28 @@ func (s *Store) CreateQuiz(difficulty string) *Quiz {
 	q := &Quiz{
 		ID:         id,
 		AdminToken: randString(hexAlphabet, 24),
-		Difficulty: meta.Key,
-		Questions:  pickQuestions(meta),
-		Points:     meta.Points,
+		Lang:       lang,
 		Phase:      PhaseLobby,
 		Current:    0,
 		teams:      make(map[string]*Team),
 		CreatedAt:  time.Now(),
 	}
+
+	if difficulty == DiffMixed {
+		q.Mixed = true
+		q.Difficulty = DiffMixed
+		q.Rounds = mixedRounds
+		q.Points = mixedPoints
+	} else {
+		meta, ok := difficulties[difficulty]
+		if !ok {
+			meta = difficulties[DiffAdult]
+		}
+		q.Difficulty = meta.Key
+		q.Questions = pickQuestions(meta)
+		q.Points = meta.Points
+	}
+
 	s.quizzes[id] = q
 	return q
 }
@@ -111,10 +142,15 @@ func (s *Store) CreateQuiz(difficulty string) *Quiz {
 // each game is different. If PlayCount is 0 or exceeds the pool, all questions
 // are used.
 func pickQuestions(meta difficultyMeta) []Question {
+	return pickN(meta, meta.PlayCount)
+}
+
+// pickN returns a freshly shuffled subset of n questions from the pool (capped
+// at the pool size). n <= 0 means the whole pool.
+func pickN(meta difficultyMeta, n int) []Question {
 	pool := make([]Question, len(meta.Questions))
 	copy(pool, meta.Questions)
 	mrand.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
-	n := meta.PlayCount
 	if n <= 0 || n > len(pool) {
 		n = len(pool)
 	}
@@ -140,9 +176,60 @@ func (q *Quiz) AddTeam(name string) *Team {
 		JoinedAt: time.Now(),
 		answers:  make(map[int]int),
 	}
+	if q.Mixed {
+		// Default new teams to Kids until the quizmaster assigns otherwise, so
+		// a team always has a playable question stream.
+		t.Difficulty = DiffKids
+		t.questions = pickN(difficulties[DiffKids], q.Rounds)
+	}
 	q.teams[t.ID] = t
 	q.order = append(q.order, t.ID)
 	return t
+}
+
+// SetTeamDifficulty assigns a team's difficulty in a mixed-mode quiz and
+// (re)draws its question stream. Only allowed in the lobby.
+func (q *Quiz) SetTeamDifficulty(teamID, difficulty string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.Mixed || q.Phase != PhaseLobby {
+		return false
+	}
+	meta, ok := difficulties[difficulty]
+	if !ok {
+		return false
+	}
+	t, ok := q.teams[teamID]
+	if !ok {
+		return false
+	}
+	t.Difficulty = meta.Key
+	t.questions = pickN(meta, q.Rounds)
+	return true
+}
+
+// questionForLocked returns the current question for a team. In mixed mode that
+// is the team's own stream; otherwise it is the shared quiz question. Caller
+// must hold q.mu.
+func (q *Quiz) questionForLocked(t *Team) (Question, bool) {
+	if q.Mixed {
+		if t != nil && q.Current >= 0 && q.Current < len(t.questions) {
+			return t.questions[q.Current], true
+		}
+		return Question{}, false
+	}
+	if q.Current >= 0 && q.Current < len(q.Questions) {
+		return q.Questions[q.Current], true
+	}
+	return Question{}, false
+}
+
+// totalLocked returns the number of questions in the game. Caller must hold q.mu.
+func (q *Quiz) totalLocked() int {
+	if q.Mixed {
+		return q.Rounds
+	}
+	return len(q.Questions)
 }
 
 // Team returns a team by id.
@@ -166,7 +253,11 @@ func (q *Quiz) SubmitAnswer(teamID string, choice int) bool {
 	if !ok {
 		return false
 	}
-	if choice < 0 || choice >= len(q.Questions[q.Current].Options) {
+	que, ok := q.questionForLocked(t)
+	if !ok {
+		return false
+	}
+	if choice < 0 || choice >= len(que.Options) {
 		return false
 	}
 	if _, answered := t.answers[q.Current]; answered {
@@ -178,12 +269,13 @@ func (q *Quiz) SubmitAnswer(teamID string, choice int) bool {
 
 // teamView is a leaderboard entry safe to expose to clients.
 type teamView struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Score    int    `json:"score"`
-	Answered bool   `json:"answered"` // answered the current question
-	Choice   int    `json:"choice"`   // -1 if not answered / not revealed
-	Correct  bool   `json:"correct"`  // whether their answer was correct (revealed only)
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Score      int    `json:"score"`
+	Answered   bool   `json:"answered"`             // answered the current question
+	Choice     int    `json:"choice"`               // -1 if not answered / not revealed
+	Correct    bool   `json:"correct"`              // whether their answer was correct (revealed only)
+	Difficulty string `json:"difficulty,omitempty"` // assigned difficulty (mixed mode)
 }
 
 // leaderboard returns teams sorted by score (desc), then join order. Caller
@@ -198,16 +290,19 @@ func (q *Quiz) leaderboardLocked(includeChoice, revealed bool) []teamView {
 		if includeChoice && revealed {
 			if c, ok := t.answers[q.Current]; ok {
 				choice = c
-				correct = c == q.Questions[q.Current].Answer
+				if que, ok := q.questionForLocked(t); ok {
+					correct = c == que.Answer
+				}
 			}
 		}
 		views = append(views, teamView{
-			ID:       t.ID,
-			Name:     t.Name,
-			Score:    t.Score,
-			Answered: answered,
-			Choice:   choice,
-			Correct:  correct,
+			ID:         t.ID,
+			Name:       t.Name,
+			Score:      t.Score,
+			Answered:   answered,
+			Choice:     choice,
+			Correct:    correct,
+			Difficulty: t.Difficulty,
 		})
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -221,21 +316,36 @@ func (q *Quiz) Start() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.Phase == PhaseLobby && len(q.teams) > 0 {
+		if q.Mixed {
+			// Make sure every team has a question stream before kickoff.
+			for _, t := range q.teams {
+				if len(t.questions) == 0 {
+					if t.Difficulty == "" {
+						t.Difficulty = DiffKids
+					}
+					t.questions = pickN(difficulties[t.Difficulty], q.Rounds)
+				}
+			}
+		}
 		q.Phase = PhaseQuestion
 		q.Current = 0
 	}
 }
 
-// Reveal scores the current question and shows the answer.
+// Reveal scores the current question and shows the answer. Correct teams each
+// earn q.Points — equal for everyone, even when difficulties differ.
 func (q *Quiz) Reveal() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.Phase != PhaseQuestion {
 		return
 	}
-	answer := q.Questions[q.Current].Answer
 	for _, t := range q.teams {
-		if c, ok := t.answers[q.Current]; ok && c == answer {
+		que, ok := q.questionForLocked(t)
+		if !ok {
+			continue
+		}
+		if c, ok := t.answers[q.Current]; ok && c == que.Answer {
 			t.Score += q.Points
 		}
 	}
@@ -249,7 +359,7 @@ func (q *Quiz) Next() {
 	if q.Phase != PhaseRevealed {
 		return
 	}
-	if q.Current+1 >= len(q.Questions) {
+	if q.Current+1 >= q.totalLocked() {
 		q.Phase = PhaseFinished
 		return
 	}
@@ -276,5 +386,12 @@ func (q *Quiz) Reset() {
 	for _, t := range q.teams {
 		t.Score = 0
 		t.answers = make(map[int]int)
+		if q.Mixed {
+			// Keep each team's assigned difficulty but draw a fresh stream.
+			if t.Difficulty == "" {
+				t.Difficulty = DiffKids
+			}
+			t.questions = pickN(difficulties[t.Difficulty], q.Rounds)
+		}
 	}
 }

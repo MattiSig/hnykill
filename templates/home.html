@@ -23,6 +23,15 @@
     </header>
 
     <form method="post" action="/create">
+      <div class="mb-6 flex flex-wrap items-center justify-center gap-3">
+        <label for="lang" class="text-sm font-semibold text-slate-300">Question language</label>
+        <select id="lang" name="lang"
+          class="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          {{range .Languages}}<option value="{{.Code}}">{{.Label}}</option>{{end}}
+        </select>
+        <span class="text-xs text-slate-500">Sets the language of the questions. The app stays in English.</span>
+      </div>
+
       <div class="grid gap-5 sm:grid-cols-3">
         {{range .Difficulties}}
         <button type="submit" name="difficulty" value="{{.Key}}"
@@ -41,6 +50,16 @@
         </button>
         {{end}}
       </div>
+
+      <button type="submit" name="difficulty" value="mixed"
+        class="group mt-5 flex w-full items-center gap-4 rounded-2xl border border-violet-500/40 bg-violet-500/10 p-6 text-left transition hover:-translate-y-1 hover:border-violet-500 hover:shadow-xl hover:shadow-violet-500/10 focus:outline-none focus:ring-2 focus:ring-violet-500">
+        <div class="text-5xl">🎲</div>
+        <div class="flex-1">
+          <h2 class="text-2xl font-bold text-violet-300">Mixed difficulty</h2>
+          <p class="mt-1 text-sm text-slate-400">Assign each team its own level (Kids / Adult / Nerd) in the lobby — everyone scores equal points, so kids can take on the grown-ups and the nerds.</p>
+        </div>
+        <span class="text-sm font-semibold text-violet-300 transition group-hover:translate-x-1">→</span>
+      </button>
     </form>
 
     <section class="mt-12 rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-sm text-slate-400">
