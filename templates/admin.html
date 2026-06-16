@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiz Master · {{.QuizID}}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+<main class="mx-auto max-w-6xl px-4 py-6">
+
+  <header class="flex flex-wrap items-center justify-between gap-3 mb-6">
+    <div>
+      <div class="flex items-center gap-2">
+        <span class="text-2xl">{{.Emoji}}</span>
+        <h1 class="text-2xl font-black">Quiz Master</h1>
+        <span class="rounded-full bg-{{.Accent}}-500/20 text-{{.Accent}}-300 px-3 py-0.5 text-sm font-semibold">{{.Difficulty}}</span>
+      </div>
+      <p class="text-slate-500 text-sm mt-1">World Cup 2026 · {{.Points}} pts per question</p>
+    </div>
+    <div class="text-right">
+      <div class="text-xs text-slate-500">Join code</div>
+      <div class="text-3xl font-black tracking-widest text-{{.Accent}}-400">{{.QuizID}}</div>
+    </div>
+  </header>
+
+  <div id="progress" class="mb-4 hidden">
+    <div class="flex justify-between text-xs text-slate-500 mb-1">
+      <span id="progressLabel"></span>
+      <span id="answeredLabel"></span>
+    </div>
+    <div class="h-2 rounded-full bg-slate-800 overflow-hidden">
+      <div id="progressBar" class="h-full bg-{{.Accent}}-500 transition-all" style="width:0%"></div>
+    </div>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-3">
+    <!-- Left / main column -->
+    <section class="lg:col-span-2 space-y-4">
+      <div id="stage" class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 min-h-[280px]"></div>
+
+      <div class="flex flex-wrap gap-3">
+        <button id="btnStart"  onclick="act('start')"  class="hidden rounded-xl bg-{{.Accent}}-500 hover:bg-{{.Accent}}-400 px-5 py-3 font-bold text-slate-950">▶ Start quiz</button>
+        <button id="btnReveal" onclick="act('reveal')" class="hidden rounded-xl bg-amber-500 hover:bg-amber-400 px-5 py-3 font-bold text-slate-950">✔ Reveal &amp; score</button>
+        <button id="btnNext"   onclick="act('next')"   class="hidden rounded-xl bg-{{.Accent}}-500 hover:bg-{{.Accent}}-400 px-5 py-3 font-bold text-slate-950">Next question →</button>
+        <button id="btnReset"  onclick="if(confirm('Reset all scores and return to the lobby?'))act('reset')" class="rounded-xl border border-slate-700 hover:bg-slate-800 px-4 py-3 text-sm text-slate-400">↺ Reset</button>
+      </div>
+    </section>
+
+    <!-- Right column: scoreboard -->
+    <aside class="space-y-4">
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-bold">Scoreboard</h2>
+          <span id="teamCount" class="text-xs text-slate-500"></span>
+        </div>
+        <ol id="board" class="space-y-2"></ol>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<!-- QR modal / lobby join panel template lives in JS -->
+<script>
+const QUIZ = "{{.QuizID}}";
+const TOKEN = "{{.Token}}";
+const JOIN_URL = "{{.JoinURL}}";
+const ACCENT = "{{.Accent}}";
+const optionLabels = ["A","B","C","D","E"];
+const optionColors = ["bg-rose-500","bg-sky-500","bg-amber-500","bg-emerald-500","bg-violet-500"];
+
+async function act(action, extra){
+  const body = new URLSearchParams(extra||{});
+  await fetch(`/api/admin/${QUIZ}/${action}?t=${TOKEN}`, {method:"POST", body});
+  poll();
+}
+
+function lobbyHTML(s){
+  return `
+  <div class="text-center">
+    <h2 class="text-xl font-bold mb-1">Waiting for teams…</h2>
+    <p class="text-slate-400 text-sm mb-5">Have everyone scan the QR code or open the link below to join.</p>
+    <div class="inline-block rounded-2xl bg-white p-4 shadow-lg">
+      <img src="/qr/${QUIZ}" alt="Join QR code" width="260" height="260" class="block">
+    </div>
+    <div class="mt-4 text-sm text-slate-400">or visit</div>
+    <div class="font-mono text-${ACCENT}-400 break-all">${JOIN_URL}</div>
+    <div class="mt-2 text-slate-500 text-sm">Join code: <span class="font-bold tracking-widest">${QUIZ}</span></div>
+    <p class="mt-6 text-slate-500 text-sm">${s.teamCount} team${s.teamCount===1?"":"s"} joined ${s.teamCount===0?"— need at least one to start":""}</p>
+  </div>`;
+}
+
+function questionHTML(s){
+  const reveal = s.phase === "revealed";
+  let opts = s.options.map((o,i)=>{
+    const correct = reveal && i === s.answer;
+    const ring = correct ? "ring-4 ring-emerald-400" : "opacity-90";
+    const mark = correct ? '<span class="ml-auto text-emerald-200 text-2xl">✔</span>' : '';
+    return `<div class="flex items-center gap-3 rounded-xl ${optionColors[i]} ${ring} px-4 py-3 text-white font-semibold">
+      <span class="grid place-items-center h-7 w-7 rounded-lg bg-black/20 font-black">${optionLabels[i]}</span>
+      <span>${escapeHTML(o)}</span>${mark}</div>`;
+  }).join("");
+  let fact = reveal && s.fact ? `<div class="mt-4 rounded-xl bg-slate-800/70 border border-slate-700 px-4 py-3 text-sm text-slate-300">💡 ${escapeHTML(s.fact)}</div>` : "";
+  return `
+    <div class="flex items-center justify-between mb-3">
+      <span class="text-xs font-semibold uppercase tracking-wide text-${ACCENT}-400">Question ${s.current+1} of ${s.total}</span>
+      <span class="text-xs text-slate-500">${s.answeredCount}/${s.teamCount} teams answered</span>
+    </div>
+    <h2 class="text-2xl font-bold mb-5 leading-snug">${escapeHTML(s.question)}</h2>
+    <div class="grid gap-3 sm:grid-cols-2">${opts}</div>
+    ${fact}`;
+}
+
+function finishedHTML(s){
+  const podium = s.teams.slice(0,3);
+  const medals = ["🥇","🥈","🥉"];
+  let rows = podium.map((t,i)=>`
+    <div class="flex items-center gap-3 rounded-xl bg-slate-800/60 px-4 py-3">
+      <span class="text-3xl">${medals[i]||""}</span>
+      <span class="font-bold text-lg">${escapeHTML(t.name)}</span>
+      <span class="ml-auto font-black text-${ACCENT}-400 text-xl">${t.score}</span>
+    </div>`).join("");
+  return `
+    <div class="text-center mb-5">
+      <div class="text-5xl mb-2">🏆</div>
+      <h2 class="text-2xl font-black">Full time!</h2>
+      <p class="text-slate-400 text-sm">${s.teams.length ? (escapeHTML(s.teams[0].name)+" takes the crown") : "No teams played"}</p>
+    </div>
+    <div class="space-y-2">${rows}</div>`;
+}
+
+function renderBoard(s){
+  const board = document.getElementById("board");
+  document.getElementById("teamCount").textContent = `${s.teamCount} team${s.teamCount===1?"":"s"}`;
+  if(!s.teams.length){ board.innerHTML = '<li class="text-slate-500 text-sm">No teams yet.</li>'; return; }
+  board.innerHTML = s.teams.map((t,i)=>{
+    let badge = "";
+    if(s.phase==="question") badge = t.answered ? '<span class="text-emerald-400 text-xs">●&nbsp;in</span>' : '<span class="text-slate-600 text-xs">○ waiting</span>';
+    if(s.phase==="revealed") badge = t.choice<0 ? '<span class="text-slate-600 text-xs">—</span>' : (t.correct ? '<span class="text-emerald-400 text-xs">✔ +'+s.points+'</span>' : '<span class="text-rose-400 text-xs">✗</span>');
+    return `<li class="flex items-center gap-2 rounded-xl bg-slate-800/50 px-3 py-2">
+      <span class="text-slate-500 w-5 text-center text-sm">${i+1}</span>
+      <span class="font-semibold truncate">${escapeHTML(t.name)}</span>
+      ${badge}
+      <span class="ml-auto font-black text-${ACCENT}-400">${t.score}</span>
+      <span class="flex gap-1">
+        <button onclick="act('adjust',{team:'${t.id}',delta:'${s.points}'})" class="h-6 w-6 rounded bg-slate-700 hover:bg-emerald-600 text-xs">+</button>
+        <button onclick="act('adjust',{team:'${t.id}',delta:'-${s.points}'})" class="h-6 w-6 rounded bg-slate-700 hover:bg-rose-600 text-xs">−</button>
+      </span>
+    </li>`;
+  }).join("");
+}
+
+function renderControls(s){
+  show("btnStart",  s.phase==="lobby" && s.teamCount>0);
+  show("btnReveal", s.phase==="question");
+  show("btnNext",   s.phase==="revealed");
+  const prog = document.getElementById("progress");
+  if(s.phase==="question"||s.phase==="revealed"){
+    prog.classList.remove("hidden");
+    document.getElementById("progressLabel").textContent = `Question ${s.current+1} / ${s.total}`;
+    document.getElementById("answeredLabel").textContent = `${s.answeredCount}/${s.teamCount} answered`;
+    document.getElementById("progressBar").style.width = ((s.current+1)/s.total*100)+"%";
+    document.getElementById("btnNext").textContent = (s.current+1>=s.total) ? "Finish 🏁" : "Next question →";
+  } else {
+    prog.classList.add("hidden");
+  }
+}
+
+function show(id,on){ document.getElementById(id).classList.toggle("hidden", !on); }
+function escapeHTML(s){ return (s||"").replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function poll(){
+  try{
+    const r = await fetch(`/api/state/${QUIZ}?t=${TOKEN}`);
+    if(!r.ok) return;
+    const s = await r.json();
+    const stage = document.getElementById("stage");
+    if(s.phase==="lobby") stage.innerHTML = lobbyHTML(s);
+    else if(s.phase==="finished") stage.innerHTML = finishedHTML(s);
+    else stage.innerHTML = questionHTML(s);
+    renderBoard(s);
+    renderControls(s);
+  }catch(e){ /* transient */ }
+}
+poll();
+setInterval(poll, 1500);
+</script>
+</body>
+</html>

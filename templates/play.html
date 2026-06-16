@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.TeamName}} · Quiz</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚽</text></svg>">
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+<main class="mx-auto max-w-lg px-4 py-6">
+
+  <header class="flex items-center justify-between mb-5">
+    <div>
+      <div class="text-xs text-slate-500 uppercase tracking-wide">{{.Difficulty}} mode</div>
+      <h1 class="text-xl font-black">{{.TeamName}} {{.Emoji}}</h1>
+    </div>
+    <div class="text-right">
+      <div class="text-xs text-slate-500">Your score</div>
+      <div id="score" class="text-2xl font-black text-{{.Accent}}-400">0</div>
+    </div>
+  </header>
+
+  <div id="stage" class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 min-h-[300px]"></div>
+</main>
+
+<script>
+const QUIZ = "{{.QuizID}}";
+const ACCENT = "{{.Accent}}";
+const optionLabels = ["A","B","C","D","E"];
+const optionColors = ["bg-rose-500","bg-sky-500","bg-amber-500","bg-emerald-500","bg-violet-500"];
+let submitting = false;
+
+async function answer(i){
+  if(submitting) return;
+  submitting = true;
+  await fetch(`/api/answer/${QUIZ}`, {method:"POST", body:new URLSearchParams({choice:i})});
+  submitting = false;
+  poll();
+}
+
+function escapeHTML(s){ return (s||"").replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function lobby(s){
+  return `<div class="text-center py-10">
+    <div class="text-5xl mb-3">⏳</div>
+    <h2 class="text-xl font-bold">You're in!</h2>
+    <p class="text-slate-400 mt-1">Waiting for the quiz master to start…</p>
+    <p class="text-slate-500 text-sm mt-4">${s.teamCount} team${s.teamCount===1?"":"s"} ready</p>
+  </div>`;
+}
+
+function question(s){
+  const reveal = s.phase === "revealed";
+  const opts = s.options.map((o,i)=>{
+    let cls = optionColors[i] + " text-white";
+    let extra = "";
+    if(reveal){
+      if(i===s.answer) extra = "ring-4 ring-emerald-300";
+      else cls = "bg-slate-700 text-slate-400";
+      if(i===s.yourChoice && i!==s.answer) extra = "ring-4 ring-rose-400";
+    } else if(i===s.yourChoice){
+      extra = "ring-4 ring-white";
+    }
+    const disabled = (reveal || s.yourChoice>=0) ? "disabled" : "";
+    return `<button ${disabled} onclick="answer(${i})"
+      class="flex items-center gap-3 rounded-xl ${cls} ${extra} px-4 py-4 text-left font-semibold w-full disabled:cursor-default">
+      <span class="grid place-items-center h-8 w-8 rounded-lg bg-black/20 font-black">${optionLabels[i]}</span>
+      <span>${escapeHTML(o)}</span>
+    </button>`;
+  }).join("");
+
+  let status = "";
+  if(reveal){
+    if(s.yourChoice<0) status = `<div class="text-center text-slate-400 text-sm">You didn't answer in time.</div>`;
+    else if(s.yourChoice===s.answer) status = `<div class="text-center text-emerald-400 font-bold">✔ Correct! +${s.points}</div>`;
+    else status = `<div class="text-center text-rose-400 font-bold">✗ Not this time</div>`;
+    if(s.fact) status += `<div class="mt-3 rounded-xl bg-slate-800/70 border border-slate-700 px-4 py-3 text-sm text-slate-300">💡 ${escapeHTML(s.fact)}</div>`;
+  } else if(s.yourChoice>=0){
+    status = `<div class="text-center text-slate-400 text-sm">Locked in ${optionLabels[s.yourChoice]} — waiting for reveal…</div>`;
+  } else {
+    status = `<div class="text-center text-slate-400 text-sm">Tap your answer!</div>`;
+  }
+
+  return `
+    <div class="text-xs font-semibold uppercase tracking-wide text-${ACCENT}-400 mb-2">Question ${s.current+1} of ${s.total}</div>
+    <h2 class="text-xl font-bold mb-4 leading-snug">${escapeHTML(s.question)}</h2>
+    <div class="grid gap-3 mb-4">${opts}</div>
+    ${status}`;
+}
+
+function finished(s){
+  const me = s.teams.find(t=>t.name===s.yourName);
+  let rank = s.teams.findIndex(t=>t.name===s.yourName)+1;
+  const medals = {1:"🥇",2:"🥈",3:"🥉"};
+  let rows = s.teams.slice(0,5).map((t,i)=>`
+    <li class="flex items-center gap-2 rounded-xl ${t.name===s.yourName?'bg-'+ACCENT+'-500/20 border border-'+ACCENT+'-500/40':'bg-slate-800/50'} px-3 py-2">
+      <span class="w-6 text-center">${medals[i+1]||(i+1)}</span>
+      <span class="font-semibold truncate">${escapeHTML(t.name)}</span>
+      <span class="ml-auto font-black text-${ACCENT}-400">${t.score}</span>
+    </li>`).join("");
+  return `<div class="text-center mb-4">
+      <div class="text-5xl mb-2">🏆</div>
+      <h2 class="text-2xl font-black">Full time!</h2>
+      ${rank? `<p class="text-slate-400">You finished <span class="font-bold text-${ACCENT}-400">#${rank}</span> with ${me?me.score:0} pts</p>`:""}
+    </div>
+    <ol class="space-y-2">${rows}</ol>`;
+}
+
+async function poll(){
+  try{
+    const r = await fetch(`/api/state/${QUIZ}`);
+    if(!r.ok) return;
+    const s = await r.json();
+    document.getElementById("score").textContent = s.yourScore ?? 0;
+    const stage = document.getElementById("stage");
+    if(s.phase==="lobby") stage.innerHTML = lobby(s);
+    else if(s.phase==="finished") stage.innerHTML = finished(s);
+    else stage.innerHTML = question(s);
+  }catch(e){}
+}
+poll();
+setInterval(poll, 1500);
+</script>
+</body>
+</html>

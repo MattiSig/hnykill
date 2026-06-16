@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join the Quiz · {{.QuizID}}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚽</text></svg>">
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 grid place-items-center px-5">
+  <main class="w-full max-w-sm text-center">
+    <div class="text-6xl mb-3">{{.Emoji}}⚽</div>
+    <h1 class="text-3xl font-black">Join the Quiz</h1>
+    <p class="text-slate-400 mt-1">World Cup 2026 · <span class="text-{{.Accent}}-400 font-semibold">{{.Difficulty}}</span> mode</p>
+    <p class="text-slate-500 text-sm mt-1">Quiz code <span class="font-bold tracking-widest">{{.QuizID}}</span></p>
+
+    <form method="post" action="/j/{{.QuizID}}" class="mt-8 space-y-4">
+      <input name="name" maxlength="30" autofocus required placeholder="Your team name"
+        class="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-center text-lg focus:border-{{.Accent}}-500 focus:outline-none focus:ring-2 focus:ring-{{.Accent}}-500/40">
+      <button class="w-full rounded-xl bg-{{.Accent}}-500 hover:bg-{{.Accent}}-400 px-5 py-3 font-bold text-slate-950">
+        Let's play! →
+      </button>
+    </form>
+    <p class="mt-6 text-xs text-slate-600">Pick a fun team name — the quiz master will see it on the scoreboard.</p>
+  </main>
+</body>
+</html>
