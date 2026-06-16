@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	mrand "math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -95,7 +96,7 @@ func (s *Store) CreateQuiz(difficulty string) *Quiz {
 		ID:         id,
 		AdminToken: randString(hexAlphabet, 24),
 		Difficulty: meta.Key,
-		Questions:  meta.Questions,
+		Questions:  pickQuestions(meta),
 		Points:     meta.Points,
 		Phase:      PhaseLobby,
 		Current:    0,
@@ -104,6 +105,20 @@ func (s *Store) CreateQuiz(difficulty string) *Quiz {
 	}
 	s.quizzes[id] = q
 	return q
+}
+
+// pickQuestions returns a freshly shuffled subset of the difficulty's pool, so
+// each game is different. If PlayCount is 0 or exceeds the pool, all questions
+// are used.
+func pickQuestions(meta difficultyMeta) []Question {
+	pool := make([]Question, len(meta.Questions))
+	copy(pool, meta.Questions)
+	mrand.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
+	n := meta.PlayCount
+	if n <= 0 || n > len(pool) {
+		n = len(pool)
+	}
+	return pool[:n]
 }
 
 // Get returns the quiz with the given id, if any.
