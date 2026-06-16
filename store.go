@@ -187,6 +187,14 @@ func (q *Quiz) AddTeam(name string) *Team {
 	return t
 }
 
+// SetLang changes the quiz's question-content language. Questions are localized
+// on render, so the change takes effect on the next poll for every device.
+func (q *Quiz) SetLang(lang string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.Lang = normalizeLang(lang)
+}
+
 // SetTeamDifficulty assigns a team's difficulty in a mixed-mode quiz and
 // (re)draws its question stream. Only allowed in the lobby.
 func (q *Quiz) SetTeamDifficulty(teamID, difficulty string) bool {
