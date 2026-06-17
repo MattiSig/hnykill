@@ -36,6 +36,7 @@ type Quiz struct {
 	AdminToken string
 	Difficulty string
 	Lang       string // language for question content: en, is, sv
+	Source     string // question source: official | community
 	Mixed      bool   // mixed mode: each team plays its own difficulty
 	Rounds     int    // number of questions per game (used in mixed mode)
 	Questions  []Question
@@ -61,6 +62,22 @@ const mixedPoints = 100
 
 // DiffMixed is the create-time value selecting mixed per-team difficulty.
 const DiffMixed = "mixed"
+
+// Question source: the built-in bank or the community-voted board. Chosen by the
+// quizmaster in the lobby, like the language.
+const (
+	SourceOfficial  = "official"
+	SourceCommunity = "community"
+)
+
+// normalizeSource coerces arbitrary input to a supported source, defaulting to
+// the built-in bank.
+func normalizeSource(s string) string {
+	if s == SourceCommunity {
+		return SourceCommunity
+	}
+	return SourceOfficial
+}
 
 // Store holds all quizzes in memory. Everything is wiped on restart.
 type Store struct {
@@ -113,6 +130,7 @@ func (s *Store) CreateQuiz(difficulty, lang string) *Quiz {
 		ID:         id,
 		AdminToken: randString(hexAlphabet, 24),
 		Lang:       lang,
+		Source:     SourceOfficial,
 		Phase:      PhaseLobby,
 		Current:    0,
 		teams:      make(map[string]*Team),
@@ -180,19 +198,64 @@ func (q *Quiz) AddTeam(name string) *Team {
 		// Default new teams to Kids until the quizmaster assigns otherwise, so
 		// a team always has a playable question stream.
 		t.Difficulty = DiffKids
-		t.questions = pickN(difficulties[DiffKids], q.Rounds)
+		t.questions = q.drawForLocked(DiffKids, q.Rounds)
 	}
 	q.teams[t.ID] = t
 	q.order = append(q.order, t.ID)
 	return t
 }
 
-// SetLang changes the quiz's question-content language. Questions are localized
-// on render, so the change takes effect on the next poll for every device.
+// SetLang changes the quiz's question-content language. Built-in questions are
+// localized on render, so the change takes effect on the next poll for every
+// device. Community questions are language-specific and drawn ahead of time, so
+// in the lobby we re-draw them to match the newly selected language.
 func (q *Quiz) SetLang(lang string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.Lang = normalizeLang(lang)
+	if q.Source == SourceCommunity && q.Phase == PhaseLobby {
+		q.redrawLocked()
+	}
+}
+
+// SetSource switches between the built-in bank and the community board as the
+// question source. Only allowed in the lobby (questions are dealt at start), and
+// it re-draws the question set so the change is immediate. Caller-facing.
+func (q *Quiz) SetSource(source string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.Phase != PhaseLobby {
+		return false
+	}
+	source = normalizeSource(source)
+	if source == q.Source {
+		return true
+	}
+	q.Source = source
+	q.redrawLocked()
+	return true
+}
+
+// drawForLocked draws n questions for the given difficulty using the quiz's
+// current source and language. Caller must hold q.mu.
+func (q *Quiz) drawForLocked(difficulty string, n int) []Question {
+	return drawQuestions(q.Source, q.Lang, difficulty, n)
+}
+
+// redrawLocked re-deals the quiz's questions for the current source/language.
+// For mixed mode every team's stream is redrawn for its own difficulty. Caller
+// must hold q.mu and should only call this in the lobby.
+func (q *Quiz) redrawLocked() {
+	if q.Mixed {
+		for _, t := range q.teams {
+			if t.Difficulty == "" {
+				t.Difficulty = DiffKids
+			}
+			t.questions = q.drawForLocked(t.Difficulty, q.Rounds)
+		}
+		return
+	}
+	q.Questions = q.drawForLocked(q.Difficulty, difficulties[q.Difficulty].PlayCount)
 }
 
 // SetTeamDifficulty assigns a team's difficulty in a mixed-mode quiz and
@@ -212,7 +275,7 @@ func (q *Quiz) SetTeamDifficulty(teamID, difficulty string) bool {
 		return false
 	}
 	t.Difficulty = meta.Key
-	t.questions = pickN(meta, q.Rounds)
+	t.questions = q.drawForLocked(meta.Key, q.Rounds)
 	return true
 }
 
@@ -331,7 +394,7 @@ func (q *Quiz) Start() {
 					if t.Difficulty == "" {
 						t.Difficulty = DiffKids
 					}
-					t.questions = pickN(difficulties[t.Difficulty], q.Rounds)
+					t.questions = q.drawForLocked(t.Difficulty, q.Rounds)
 				}
 			}
 		}
@@ -399,7 +462,7 @@ func (q *Quiz) Reset() {
 			if t.Difficulty == "" {
 				t.Difficulty = DiffKids
 			}
-			t.questions = pickN(difficulties[t.Difficulty], q.Rounds)
+			t.questions = q.drawForLocked(t.Difficulty, q.Rounds)
 		}
 	}
 }

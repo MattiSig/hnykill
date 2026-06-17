@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Submit a Question · World Cup 2026 Quiz</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✍️</text></svg>">
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+  <div class="absolute inset-0 overflow-hidden -z-10">
+    <div class="absolute -top-32 right-0 h-96 w-96 rounded-full bg-sky-500/20 blur-3xl"></div>
+  </div>
+
+  <main class="mx-auto max-w-2xl px-5 py-10">
+    <a href="/community" class="text-sm text-slate-500 hover:text-slate-300">← Back to community questions</a>
+    <h1 class="mt-3 text-3xl font-black tracking-tight">✍️ Submit a question</h1>
+    <p class="mt-2 text-slate-400">Write it in any one language. The best questions rise to the top by votes.</p>
+
+    {{if .Error}}
+    <div class="mt-6 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-rose-300">{{.Error}}</div>
+    {{end}}
+
+    <form method="post" action="/community/new" class="mt-6 space-y-6">
+      <div>
+        <label class="block text-sm font-semibold text-slate-300">Question</label>
+        <textarea name="text" rows="2" maxlength="200" required placeholder="e.g. Which country won the 2018 World Cup?"
+          class="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40">{{.Prev.Text}}</textarea>
+      </div>
+
+      <div>
+        <label class="block text-sm font-semibold text-slate-300">Answer options</label>
+        <p class="text-xs text-slate-500">Fill at least 2. Pick the radio next to the correct one.</p>
+        <div class="mt-2 space-y-2">
+          {{range $i, $opt := .Prev.Options}}
+          <div class="flex items-center gap-3">
+            <input type="radio" name="answer" value="{{$i}}" {{if eq $.Prev.Answer $i}}checked{{end}}
+              class="h-5 w-5 shrink-0 accent-emerald-500" aria-label="Mark option {{$i}} correct">
+            <input type="text" name="option{{$i}}" value="{{$opt}}" maxlength="80" placeholder="Option {{$i}}"
+              class="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40">
+          </div>
+          {{end}}
+        </div>
+      </div>
+
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm font-semibold text-slate-300">Difficulty</label>
+          <select name="difficulty" required class="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 focus:border-sky-500">
+            <option value="" disabled {{if not .Prev.Difficulty}}selected{{end}}>Choose…</option>
+            {{range .Difficulties}}<option value="{{.Key}}" {{if eq .Key $.Prev.Difficulty}}selected{{end}}>{{.Emoji}} {{.Title}}</option>{{end}}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-semibold text-slate-300">Language</label>
+          <select name="language" class="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 focus:border-sky-500">
+            {{range .Languages}}<option value="{{.Code}}" {{if eq .Code $.Prev.Language}}selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-semibold text-slate-300">Fun fact <span class="font-normal text-slate-500">(optional, shown after the answer)</span></label>
+        <input type="text" name="fact" value="{{.Prev.Fact}}" maxlength="240" placeholder="e.g. France beat Croatia 4–2 in Moscow."
+          class="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40">
+      </div>
+
+      <div>
+        <label class="block text-sm font-semibold text-slate-300">Your name <span class="font-normal text-slate-500">(optional)</span></label>
+        <input type="text" name="author" value="{{.Prev.Author}}" maxlength="30" placeholder="Anonymous"
+          class="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40">
+      </div>
+
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <label class="block text-sm font-semibold text-slate-300">Quick check — {{.CaptchaPrompt}}</label>
+        <input type="hidden" name="captcha_token" value="{{.CaptchaToken}}">
+        <input type="text" name="captcha_answer" inputmode="numeric" required placeholder="Your answer"
+          class="mt-1 w-40 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40">
+      </div>
+
+      <button type="submit" class="w-full rounded-xl bg-sky-500 px-5 py-3 font-bold text-slate-950 transition hover:bg-sky-400">
+        Submit question →
+      </button>
+    </form>
+  </main>
+</body>
+</html>

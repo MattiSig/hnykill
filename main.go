@@ -21,7 +21,11 @@ var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
 var store = NewStore()
 
+var community = newCommunityStore()
+
 func main() {
+	seedOfficialQuestions(community)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /", handleHome)
@@ -34,6 +38,10 @@ func main() {
 	mux.HandleFunc("GET /api/state/{id}", handleState)
 	mux.HandleFunc("POST /api/answer/{id}", handleAnswer)
 	mux.HandleFunc("POST /api/admin/{id}/{action}", handleAdminAction)
+	mux.HandleFunc("GET /community", handleCommunityBrowse)
+	mux.HandleFunc("GET /community/new", handleCommunityNew)
+	mux.HandleFunc("POST /community/new", handleCommunitySubmit)
+	mux.HandleFunc("POST /api/community/{id}/vote", handleCommunityVote)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
@@ -82,6 +90,37 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func playerCookieName(quizID string) string { return "hny_pid_" + quizID }
+
+// voterCookieName is the anonymous identity used to dedupe community upvotes
+// (one vote per question per browser).
+const voterCookieName = "hny_voter"
+
+// ensureVoterID returns the requester's voter id, minting and setting a cookie
+// if they don't have one yet.
+func ensureVoterID(w http.ResponseWriter, r *http.Request) string {
+	if c, err := r.Cookie(voterCookieName); err == nil && c.Value != "" {
+		return c.Value
+	}
+	id := randString(hexAlphabet, 16)
+	http.SetCookie(w, &http.Cookie{
+		Name:     voterCookieName,
+		Value:    id,
+		Path:     "/",
+		MaxAge:   60 * 60 * 24 * 365,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	return id
+}
+
+// sourceMeta describes a selectable question source for the lobby dropdown.
+type sourceMeta struct{ Key, Label, Emoji string }
+
+// questionSources is the ordered list shown in the source selector.
+var questionSources = []sourceMeta{
+	{SourceOfficial, "Official", "📚"},
+	{SourceCommunity, "Community", "🗳️"},
+}
 
 // quizMeta returns display fields (title, emoji, accent) for a quiz, handling
 // the synthetic "mixed" difficulty which has no entry in the difficulties map.
@@ -163,6 +202,8 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 		"DiffOptions": diffOpts,
 		"Lang":        q.Lang,
 		"Languages":   languages,
+		"Source":      q.Source,
+		"Sources":     questionSources,
 		"JoinURL":     baseURL(r) + "/j/" + q.ID,
 	})
 }
@@ -296,6 +337,7 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		"isAdmin":       isAdmin,
 		"mixed":         q.Mixed,
 		"lang":          q.Lang,
+		"source":        q.Source,
 		"difficulty":    title,
 		"teamCount":     len(q.teams),
 		"answeredCount": 0,
@@ -392,11 +434,219 @@ func handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		q.SetTeamDifficulty(r.FormValue("team"), r.FormValue("difficulty"))
 	case "setlang":
 		q.SetLang(r.FormValue("lang"))
+	case "setsource":
+		q.SetSource(r.FormValue("source"))
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// ---- community questions ----
+
+// diffOption / langOption are small view models for the submit form selects and
+// the browse-page filters.
+type diffOption struct{ Key, Title, Emoji string }
+type langOption struct{ Code, Label string }
+
+func difficultyOptions() []diffOption {
+	var out []diffOption
+	for _, key := range difficultyOrder {
+		d := difficulties[key]
+		out = append(out, diffOption{d.Key, d.Title, d.Emoji})
+	}
+	return out
+}
+
+func languageOptions() []langOption {
+	var out []langOption
+	for _, l := range languages {
+		out = append(out, langOption{l.Code, l.Label})
+	}
+	return out
+}
+
+// communityCardView is a question prepared for display: the correct option is
+// flagged and the difficulty/language get human labels.
+type communityCardView struct {
+	ID         string
+	Text       string
+	Options    []optionView
+	Fact       string
+	Difficulty string
+	Language   string
+	Author     string
+	Official   bool
+	Votes      int
+	Voted      bool
+}
+
+type optionView struct {
+	Text    string
+	Correct bool
+}
+
+func langLabel(code string) string {
+	for _, l := range languages {
+		if l.Code == code {
+			return l.Label
+		}
+	}
+	return code
+}
+
+func diffLabel(key string) string {
+	if d, ok := difficulties[key]; ok {
+		return d.Emoji + " " + d.Title
+	}
+	return key
+}
+
+func handleCommunityBrowse(w http.ResponseWriter, r *http.Request) {
+	voterID := ensureVoterID(w, r)
+
+	lang := r.URL.Query().Get("lang")
+	if lang != "" {
+		lang = normalizeLang(lang)
+	}
+	difficulty := r.URL.Query().Get("difficulty")
+	switch difficulty {
+	case DiffKids, DiffAdult, DiffNerd:
+	default:
+		difficulty = ""
+	}
+
+	items, err := community.List(lang, difficulty)
+	if err != nil {
+		log.Printf("community list: %v", err)
+		http.Error(w, "could not load questions", http.StatusInternalServerError)
+		return
+	}
+
+	cards := make([]communityCardView, 0, len(items))
+	for _, q := range items {
+		opts := make([]optionView, len(q.Options))
+		for i, o := range q.Options {
+			opts[i] = optionView{Text: o, Correct: i == q.Answer}
+		}
+		cards = append(cards, communityCardView{
+			ID:         q.ID,
+			Text:       q.Text,
+			Options:    opts,
+			Fact:       q.Fact,
+			Difficulty: diffLabel(q.Difficulty),
+			Language:   langLabel(q.Language),
+			Author:     q.Author,
+			Official:   q.Author == officialAuthor,
+			Votes:      q.Votes,
+			Voted:      q.Voters[voterID],
+		})
+	}
+
+	render(w, "community.html", map[string]any{
+		"Cards":        cards,
+		"Count":        len(cards),
+		"Total":        community.Count(),
+		"Languages":    languageOptions(),
+		"Difficulties": difficultyOptions(),
+		"FilterLang":   lang,
+		"FilterDiff":   difficulty,
+		"Submitted":    r.URL.Query().Get("submitted") == "1",
+	})
+}
+
+func handleCommunityNew(w http.ResponseWriter, r *http.Request) {
+	renderCommunityForm(w, "", nil)
+}
+
+// renderCommunityForm shows the submission form with a fresh captcha. errMsg and
+// prev (the previously entered values) let it re-render after a failed submit
+// without losing the user's input.
+func renderCommunityForm(w http.ResponseWriter, errMsg string, prev map[string]any) {
+	// Normalize so the template never has to guard nil/short values.
+	if prev == nil {
+		prev = map[string]any{}
+	}
+	opts, _ := prev["Options"].([]string)
+	for len(opts) < maxOptions {
+		opts = append(opts, "")
+	}
+	prev["Options"] = opts[:maxOptions]
+	if _, ok := prev["Answer"].(int); !ok {
+		prev["Answer"] = -1
+	}
+	for _, k := range []string{"Text", "Fact", "Difficulty", "Language", "Author"} {
+		if _, ok := prev[k].(string); !ok {
+			prev[k] = ""
+		}
+	}
+
+	prompt, token := newCaptcha()
+	data := map[string]any{
+		"Error":         errMsg,
+		"CaptchaPrompt": prompt,
+		"CaptchaToken":  token,
+		"Languages":     languageOptions(),
+		"Difficulties":  difficultyOptions(),
+		"Prev":          prev,
+	}
+	render(w, "community_new.html", data)
+}
+
+func handleCommunitySubmit(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		renderCommunityForm(w, "Could not read the form. Please try again.", nil)
+		return
+	}
+
+	answerIdx, _ := strconv.Atoi(r.FormValue("answer"))
+	rawOptions := []string{
+		r.FormValue("option0"), r.FormValue("option1"),
+		r.FormValue("option2"), r.FormValue("option3"),
+	}
+	prev := map[string]any{
+		"Text":       r.FormValue("text"),
+		"Options":    rawOptions,
+		"Answer":     answerIdx,
+		"Fact":       r.FormValue("fact"),
+		"Difficulty": r.FormValue("difficulty"),
+		"Language":   r.FormValue("language"),
+		"Author":     r.FormValue("author"),
+	}
+
+	if !verifyCaptcha(r.FormValue("captcha_token"), r.FormValue("captcha_answer")) {
+		renderCommunityForm(w, "Captcha was wrong or expired — please solve the new one.", prev)
+		return
+	}
+
+	q, msg := sanitizeSubmission(
+		r.FormValue("text"), rawOptions, answerIdx,
+		r.FormValue("fact"), r.FormValue("difficulty"), r.FormValue("language"), r.FormValue("author"),
+	)
+	if msg != "" {
+		renderCommunityForm(w, msg, prev)
+		return
+	}
+
+	if err := community.Add(q); err != nil {
+		log.Printf("community add: %v", err)
+		renderCommunityForm(w, "Something went wrong saving your question. Please try again.", prev)
+		return
+	}
+	http.Redirect(w, r, "/community?submitted=1", http.StatusSeeOther)
+}
+
+func handleCommunityVote(w http.ResponseWriter, r *http.Request) {
+	voterID := ensureVoterID(w, r)
+	id := r.PathValue("id")
+	voted, err := community.Vote(id, voterID)
+	if err != nil {
+		log.Printf("community vote: %v", err)
+		http.Error(w, "vote failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "counted": voted})
 }
 
 func notFoundPage(w http.ResponseWriter, r *http.Request) {
