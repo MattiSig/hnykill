@@ -205,6 +205,37 @@ func TestSeedIsIdempotentAndPreservesVotes(t *testing.T) {
 	}
 }
 
+func TestDrawQuestionsSource(t *testing.T) {
+	orig := community
+	defer func() { community = orig }()
+	fs, _ := newFileCommunityStore(filepath.Join(t.TempDir(), "c.json"))
+	community = fs
+
+	// Official source draws from the built-in bank.
+	if got := drawQuestions(SourceOfficial, "en", DiffKids, 5); len(got) != 5 {
+		t.Fatalf("official draw = %d, want 5", len(got))
+	}
+	// Community source with an empty board falls back to the built-in bank.
+	if got := drawQuestions(SourceCommunity, "en", DiffKids, 5); len(got) != 5 {
+		t.Fatalf("empty community should fall back to official, got %d", len(got))
+	}
+
+	// Add 3 English adult community questions; community source should use them.
+	for i := 0; i < 3; i++ {
+		_ = fs.Add(&CommunityQuestion{
+			Text: fmt.Sprintf("community q%d", i), Options: []string{"a", "b"},
+			Answer: 0, Difficulty: DiffAdult, Language: "en",
+		})
+	}
+	if got := drawQuestions(SourceCommunity, "en", DiffAdult, 5); len(got) != 3 {
+		t.Fatalf("community draw = %d, want 3 (all available)", len(got))
+	}
+	// A language with no community questions falls back to the built-in bank.
+	if got := drawQuestions(SourceCommunity, "is", DiffAdult, 5); len(got) != 5 {
+		t.Fatalf("community 'is' empty should fall back to official, got %d", len(got))
+	}
+}
+
 func TestFileStoreFilter(t *testing.T) {
 	s, _ := newFileCommunityStore(filepath.Join(t.TempDir(), "c.json"))
 	_ = s.Add(&CommunityQuestion{Text: "en-kids", Options: []string{"a", "b"}, Difficulty: DiffKids, Language: "en"})

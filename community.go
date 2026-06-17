@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	mrand "math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -90,6 +91,34 @@ func officialQuestions() []*CommunityQuestion {
 		}
 	}
 	return out
+}
+
+// drawQuestions returns up to n play questions for the chosen source. The
+// official source deals a fresh random subset of the built-in bank (replayable).
+// The community source plays the crowd's favourites: the top-voted community
+// questions for this language and difficulty, lightly shuffled for variety, so
+// votes actually shape the game. If the community pool is empty it falls back to
+// the built-in bank so a game is never left without questions.
+func drawQuestions(source, lang, difficulty string, n int) []Question {
+	if source == SourceCommunity {
+		if items, err := community.List(lang, difficulty); err == nil && len(items) > 0 {
+			// items are sorted by votes desc; keep the better-voted top slice,
+			// then shuffle within it so repeat games aren't identical.
+			if n > 0 && len(items) > n*2 {
+				items = items[:n*2]
+			}
+			qs := make([]Question, 0, len(items))
+			for _, c := range items {
+				qs = append(qs, Question{Text: c.Text, Options: c.Options, Answer: c.Answer, Fact: c.Fact})
+			}
+			mrand.Shuffle(len(qs), func(i, j int) { qs[i], qs[j] = qs[j], qs[i] })
+			if n > 0 && n < len(qs) {
+				qs = qs[:n]
+			}
+			return qs
+		}
+	}
+	return pickN(difficulties[difficulty], n)
 }
 
 // seedOfficialQuestions loads the built-in bank into the community board. Safe to

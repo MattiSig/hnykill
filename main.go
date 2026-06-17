@@ -113,6 +113,15 @@ func ensureVoterID(w http.ResponseWriter, r *http.Request) string {
 	return id
 }
 
+// sourceMeta describes a selectable question source for the lobby dropdown.
+type sourceMeta struct{ Key, Label, Emoji string }
+
+// questionSources is the ordered list shown in the source selector.
+var questionSources = []sourceMeta{
+	{SourceOfficial, "Official", "📚"},
+	{SourceCommunity, "Community", "🗳️"},
+}
+
 // quizMeta returns display fields (title, emoji, accent) for a quiz, handling
 // the synthetic "mixed" difficulty which has no entry in the difficulties map.
 func quizMeta(q *Quiz) (title, emoji, accent string) {
@@ -193,6 +202,8 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 		"DiffOptions": diffOpts,
 		"Lang":        q.Lang,
 		"Languages":   languages,
+		"Source":      q.Source,
+		"Sources":     questionSources,
 		"JoinURL":     baseURL(r) + "/j/" + q.ID,
 	})
 }
@@ -326,6 +337,7 @@ func handleState(w http.ResponseWriter, r *http.Request) {
 		"isAdmin":       isAdmin,
 		"mixed":         q.Mixed,
 		"lang":          q.Lang,
+		"source":        q.Source,
 		"difficulty":    title,
 		"teamCount":     len(q.teams),
 		"answeredCount": 0,
@@ -422,6 +434,8 @@ func handleAdminAction(w http.ResponseWriter, r *http.Request) {
 		q.SetTeamDifficulty(r.FormValue("team"), r.FormValue("difficulty"))
 	case "setlang":
 		q.SetLang(r.FormValue("lang"))
+	case "setsource":
+		q.SetSource(r.FormValue("source"))
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return

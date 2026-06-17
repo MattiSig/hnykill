@@ -21,6 +21,12 @@ code to join as a team, and scores are kept live — Kahoot-style.
   so real players help grow and improve the question bank. A lightweight
   built-in "not a robot" check (a signed arithmetic captcha) keeps out drive-by
   spam. This is the one part of the app that is **persisted** (see below).
+- **Play official or community questions** — in the lobby the quiz master picks
+  the question **source** (📚 Official bank or 🗳️ Community) right next to the
+  language selector. Pick *Community* and the game plays the **top-voted**
+  submissions for the chosen language & difficulty, so the crowd's votes
+  directly shape what gets played (falls back to the official bank if the
+  community pool is empty).
 - **In-memory gameplay** — live quizzes have no database, no accounts, no stored
   data; everything lives in RAM and is wiped when the server restarts. Security
   is intentionally out of scope (family use, no sensitive data).
