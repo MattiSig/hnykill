@@ -114,6 +114,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 	render(w, "home.html", map[string]any{
 		"Difficulties": diffs,
+		"Languages":    languages,
 	})
 }
 
